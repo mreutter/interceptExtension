@@ -109,9 +109,9 @@ async function finalizeAccumulated(id) {
     const entry = accumulatedResponses[id];
     if (!entry) return;
 
-    const fullText = entry.chunks.join("");
+    const response_fullText = entry.chunks.join("");
+    const req = entry.req;
 
-    let content;
     let msg;
 
     switch (entry.provider) {
@@ -119,10 +119,10 @@ async function finalizeAccumulated(id) {
             // Not implemented
             break;
         case "chatgpt":
-            content = extractChatGPTContent(fullText);
-            result = extractChatGPTInfo(fullText);
-            result.content = content;
-            msg = formatChatGPT(result);
+            let response_content = extractChatGPTContent(response_fullText);
+            let result_info = extractChatGPTInfo(response_fullText, req); // #top 10 bugs with the most aura (time wasted: 4h)
+            result_info.content = response_content;
+            msg = formatChatGPT(result_info);
             break;
         case "gemini":
             // Not implemented
@@ -134,7 +134,6 @@ async function finalizeAccumulated(id) {
     if (msg) { 
         let c = await compress(JSON.stringify(msg),"gzip");
         let finalMessage = {"provider": entry.provider, "content": arrayBufferToBase64(c)};
-        console.log(finalMessage)
         sendToBG(finalMessage, "DATA", "TO_WS"); console.log("Sent content to server.") 
     }
 }
@@ -180,42 +179,61 @@ const chatGPTContentRegex = /(?:\\"|")v(?:\\"|"):\s*(?:\\"|")(?<content>[\s\S]*?
 const chatGPTRequestRegex = /(?:\\"|")parts(?:\\"|"):\s*\[(?:\\"|")(?<request>[\s\S]*?)(?:\\"|")\]/gm;
 const chatGPTConvoIdRegex = /(?:\\"|")conversation_id(?:\\"|"):\s*(?:\\"|")(?<convoId>[\s\S]*?)(?:\\"|")/gm
 const chatGPTParentMsgIdRegex = /(?:\\"|")parent_message_id(?:\\"|"):\s*(?:\\"|")(?<parentMessageId>[\s\S]*?)(?:\\"|")/gm;
-const chatGPTMsgIdRegex = /(?:\\"|")message_id(?:\\"|"):\s*(?:\\"|")(?<messageId>[\s\S]*?)(?:\\"|")/gm
+const chatGPTMsgIdRegex = /(?:\\"|")message_id(?:\\"|"):\s*(?:\\"|")(?<messageId>[\w\-]*?)(?:\\"|")/gm
 const removeBackslash = /\\{2,}/gm;
 
 function extractChatGPTContent(input) {
-    let completeContent = "";
+    let gathered_content = "";
+    
+    chatGPTContentRegex.lastIndex = 0; // reset regex state
+    
     //Extract content
     do {
-        const regMatch = chatGPTContentRegex.exec(input);
-        if (regMatch == undefined) break;
-        const content = regMatch.groups.content;
-        if (content == "finished_successfully") break;
-        completeContent += content;
+        const matched_subsection = chatGPTContentRegex.exec(input);
+        if (matched_subsection == undefined) break;
+        const subsection = matched_subsection.groups.content;
+        if (subsection == "finished_successfully") break;
+        gathered_content += subsection;
     } while (true)
-
-    //Remove \\+n and \\+"
-    completeContent.replace(removeBackslash, "\\");
     
-    return completeContent;
+    return gathered_content;
 }
 
-function extractChatGPTInfo(input) {
-    const request = chatGPTRequestRegex.exec(input)?.groups?.request;
-    const convoId = chatGPTConvoIdRegex.exec(input)?.groups?.convoId;
-    const parentMessageId = chatGPTParentMsgIdRegex.exec(input)?.groups?.parentMessageId;
-    const messageId = chatGPTMsgIdRegex.exec(input)?.groups?.messageId;
+function extractChatGPTInfo(res, req) {
+    const convoId = req["conversation_id"];
+    const parentMessageId = req["parent_message_id"];
 
-    return { request, convoId, parentMessageId, messageId };
+    const request = req["messages"][0]["content"]["parts"][0];
+
+    chatGPTMsgIdRegex.lastIndex = 0; // reset regex state
+    const messageId = chatGPTMsgIdRegex.exec(res)?.groups?.messageId;
+
+    return { request: request, convoId: convoId, parentMessageId: parentMessageId, messageId: messageId };
 }
 
 function formatChatGPT(result) {
     return JSON.stringify({
-        request: result.request,
         convoId: result.convoId,
-        parentMessageId: result.parentMessageId,
         messageId: result.messageId,
+        parentMessageId: result.parentMessageId,
+        request: result.request,
         response: result.content,
         timestamp: Date.now() //Unix timestamp
     });
+}
+
+async function simulate(req, res){
+    let response_content;
+    let msg;
+
+    response_content = extractChatGPTContent(res);
+    let result = extractChatGPTInfo(res, req);
+    result.content = response_content;
+    msg = formatChatGPT(result);
+
+    if (msg) { 
+        let c = await compress(JSON.stringify(msg),"gzip");
+        let finalMessage = {"provider": "chatgpt", "content": arrayBufferToBase64(c)};
+        sendToBG(finalMessage, "DATA", "TO_WS"); console.log("Sent content to server.") 
+    }
 }
