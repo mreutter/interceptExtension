@@ -29,23 +29,23 @@ sendToBG("check", "CTRL", "TO_WS");
 
 //Replace Fetch with Interceptor
 const originalFetch = window.fetch;
-
 window.fetch = async (...args) => {
     const url = args[0];
     const request = args[1] || {};
     const method = (request.method || "GET").toUpperCase();
 
+    
     //Original Fetch
     const realResponse = await originalFetch(...args);
-
+    
     //Clone stream
     const response = realResponse.clone();
     const reader = response.body?.getReader?.();
     if (!reader) return realResponse;  // non-streaming response
-
+    
     //Accumulator Id
     const id = url + "::" + Date.now();
-
+    
     const bIndex = getChatbotIndex(url);
     if (bIndex === -1) return realResponse;
 
@@ -53,7 +53,7 @@ window.fetch = async (...args) => {
         provider: providers[bIndex],
         url,
         method,
-        req: request,
+        req: request.body,
         chunks: []
     };
 
@@ -110,7 +110,7 @@ async function finalizeAccumulated(id) {
     if (!entry) return;
 
     const response_fullText = entry.chunks.join("");
-    const req = entry.req;
+    const req = JSON.parse(entry.req); 
 
     let msg;
 
@@ -199,6 +199,7 @@ function extractChatGPTContent(input) {
     return gathered_content;
 }
 
+treq = null;
 function extractChatGPTInfo(res, req) {
     const convoId = req["conversation_id"];
     const parentMessageId = req["parent_message_id"];
@@ -222,6 +223,8 @@ function formatChatGPT(result) {
     });
 }
 
+
+//Purely for debug purposes to test from the compression up until the saving of the file on the server side
 async function simulate(req, res){
     let response_content;
     let msg;
